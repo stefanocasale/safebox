@@ -52,6 +52,8 @@
 
 #include "safebox.h"
 
+#include <arpa/inet.h>
+
 // Variables globales
 static unsigned char *master_key = NULL;
 static size_t master_key_len = 0;
@@ -294,3 +296,242 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
     close(conn_fd);
     sb_log(log_fd, SB_LOG_INFO, "cliente %d desconectado (stub)", client_pid);
 }
+
+/*
+ * list_files - Obtiene la lista de nombres de archivos en la bóveda
+ * @lista: puntero a un arreglo de strings donde se guardarán los nombres
+ * @count: puntero donde se almacenará el número de archivos
+ *
+ * Retorna: 0 en éxito, -1 en error
+ */
+static int list_files(char ***lista, size_t *count)
+{
+    DIR *dir;
+    struct dirent *entry;
+    char **names = NULL;
+    size_t n = 0;
+    size_t capacity = 0;
+
+    // Abrimos el directorio de la bóveda
+    dir = opendir(boveda_path);
+    if (dir == NULL) {
+        return -1;
+    }
+
+    // Contamos los archivos y asignamos dinámicamente
+    while ((entry = readdir(dir)) != NULL) {
+        // Ignoramos "." y ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        // Agrandamos el arreglo si es necesario
+        if (n >= capacity) {
+            capacity = capacity == 0 ? 8 : capacity * 2;
+            char **new_names = realloc(names, capacity * sizeof(char *));
+            if (new_names == NULL) {
+                // Error de memoria: liberamos lo que llevamos
+                for (size_t i = 0; i < n; i++)
+                    free(names[i]);
+                free(names);
+                closedir(dir);
+                return -1;
+            }
+            names = new_names;
+        }
+
+        // Duplicamos el nombre y lo guardamos
+        names[n] = strdup(entry->d_name);
+        if (names[n] == NULL) {
+            for (size_t i = 0; i < n; i++)
+                free(names[i]);
+            free(names);
+            closedir(dir);
+            return -1;
+        }
+        n++;
+    }
+
+    closedir(dir);
+
+    // Asignamos los resultados
+    *lista = names;
+    *count = n;
+    return 0;
+}
+
+/*
+ * del_file - Elimina un archivo de la bóveda
+ * @name: nombre del archivo (sin rutas)
+ *
+ * Retorna: 0 en éxito, -1 en error (archivo no existe, permisos, etc.)
+ */
+static int del_file(const char *name)
+{
+    // Validamos que el nombre no contenga '/' 
+    if (strchr(name, '/') != NULL) {
+        return -1;  
+    }
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", boveda_path, name);
+
+    if (unlink(path) == 0) {
+        return 0;   // éxito
+    } else {
+        return -1;  // error 
+    }
+}
+
+/*
+ * put_file - Guarda un archivo cifrado en la bóveda
+ * @name: nombre del archivo (sin rutas)
+ * @data: contenido del archivo en claro
+ * @size: tamaño del contenido en bytes
+ *
+ * Retorna: 0 en éxito, -1 en error
+ */
+static int put_file(const char *name, const unsigned char *data, uint32_t size)
+{
+    // Validamos nombre
+    if (strchr(name, '/') != NULL) {
+        return -1;
+    }
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", boveda_path, name);
+
+    // Abrimos el archivo para escritura
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd == -1) {
+        return -1;
+    }
+
+    // Construimos el buffer 
+    uint32_t payload_size = size + SB_MAGIC_LEN; 
+    unsigned char *plain = malloc(payload_size);
+    if (!plain) {
+        close(fd);
+        return -1;
+    }
+    memcpy(plain, SB_MAGIC, SB_MAGIC_LEN);
+    memcpy(plain + SB_MAGIC_LEN, data, size);
+
+    // Ciframos con XOR
+    for (uint32_t i = 0; i < payload_size; i++) {
+        plain[i] ^= master_key[i % master_key_len];
+    }
+
+    // Preparamos la cabecera 
+    sb_file_header_t header;
+    header.version = SB_VERSION;
+    header.payload_size = htonl(payload_size); // big-endian
+    memset(header.reserved, 0, 3);
+
+    // Escribimos cabecera
+    ssize_t written = write(fd, &header, sizeof(header));
+    if (written != sizeof(header)) {
+        free(plain);
+        close(fd);
+        return -1;
+    }
+
+    // Escribimos payload cifrado
+    written = write(fd, plain, payload_size);
+    if (written != (ssize_t)payload_size) {
+        free(plain);
+        close(fd);
+        return -1;
+    }
+
+    free(plain);
+    close(fd);
+    return 0;
+}
+
+/*
+ * get_file_as_memfd - Lee un archivo, lo descifra y devuelve un memfd con el contenido
+ * @name: nombre del archivo (sin rutas)
+ * @out_fd: puntero donde se guardará el descriptor del memfd
+ *
+ * Retorna: 0 en éxito, -1 en error (archivo no existe, corrupto, etc.)
+ */
+static int get_file_as_memfd(const char *name, int *out_fd)
+{
+    // Validamos nombre
+    if (strchr(name, '/') != NULL) {
+        return -1;
+    }
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", boveda_path, name);
+
+    int fd_file = open(path, O_RDONLY);
+    if (fd_file == -1) {
+        return -1; 
+    }
+
+    // Leemos la cabecera
+    sb_file_header_t header;
+    ssize_t n = read(fd_file, &header, sizeof(header));
+    if (n != sizeof(header)) {
+        close(fd_file);
+        return -1;
+    }
+
+    // Validamos versión
+    if (header.version != SB_VERSION) {
+        close(fd_file);
+        return -1;
+    }
+
+    uint32_t payload_size = ntohl(header.payload_size);
+
+    // Leemos el payload cifrado
+    unsigned char *cipher = malloc(payload_size);
+    if (!cipher) {
+        close(fd_file);
+        return -1;
+    }
+    n = read(fd_file, cipher, payload_size);
+    if (n != (ssize_t)payload_size) {
+        free(cipher);
+        close(fd_file);
+        return -1;
+    }
+    close(fd_file);
+
+    // Desciframos in-place
+    for (uint32_t i = 0; i < payload_size; i++) {
+        cipher[i] ^= master_key[i % master_key_len];
+    }
+
+    // Verificamos el magic number
+    if (memcmp(cipher, SB_MAGIC, SB_MAGIC_LEN) != 0) {
+        free(cipher);
+        return -1; 
+    }
+
+    // Creamos un memfd
+    int fd_mem = memfd_create("content", MFD_CLOEXEC);
+    if (fd_mem == -1) {
+        free(cipher);
+        return -1;
+    }
+
+    // Escribimos el contenido 
+    uint32_t content_size = payload_size - SB_MAGIC_LEN;
+    n = write(fd_mem, cipher + SB_MAGIC_LEN, content_size);
+    if (n != (ssize_t)content_size) {
+        close(fd_mem);
+        free(cipher);
+        return -1;
+    }
+
+    // Rebobinamos el fd para que el cliente lea desde el principio
+    lseek(fd_mem, 0, SEEK_SET);
+
+    free(cipher);
+    *out_fd = fd_mem;
+    return 0;
+}
+

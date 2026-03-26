@@ -411,3 +411,256 @@
 - Stefano (Módulos 1 y 3): Se encarga del corazón del daemon: arranque, daemonización, lectura segura de la clave, manejo de señales, y toda la lógica de cifrado/descifrado y operaciones con archivos (LIST, PUT, DEL, y la función auxiliar para GET). Es un rol que trabaja directamente con llamadas al sistema como fork, setsid, termios, opendir, open, mmap (opcional), y el cifrado XOR.
 
 - Alejandro (Módulos 2 y 4): Se enfoca en la comunicación: implementar las funciones del cliente (safebox_client.c) que el shell usará, y en el daemon el manejo de la autenticación, el despachador de comandos, y la transferencia de descriptores con SCM_RIGHTS para GET. También asegura que todo quede registrado en el log. Usa socket, connect, sendmsg/recvmsg, y memfd_create
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Instrucciones para Alejandro
+Estado actual del proyecto
+El daemon (safebox-daemon.c) ya está implementado por la Persona A. Contiene:
+
+Arranque seguro con lectura de clave (sin eco).
+
+Daemonización (fork, setsid, redirección de descriptores).
+
+Socket Unix en /tmp/safebox.sock y bucle de aceptación de conexiones.
+
+Logging con sb_log en /tmp/safebox.log.
+
+Funciones de archivo completas:
+
+list_files(char ***lista, size_t *count) → devuelve arreglo de nombres.
+
+put_file(const char *name, const unsigned char *data, uint32_t size) → guarda archivo cifrado.
+
+del_file(const char *name) → elimina archivo.
+
+get_file_as_memfd(const char *name, int *out_fd) → devuelve un memfd con el contenido descifrado.
+
+Un stub de manejar_cliente() que solo cierra la conexión y registra en el log.
+
+Tu tarea es:
+
+Implementar las 6 funciones del cliente en src/safebox_client.c (según las firmas de safebox_client.h).
+
+Modificar manejar_cliente() en safebox-daemon.c para que:
+
+Autentique al cliente (comparando el hash de la clave).
+
+Despache los comandos SB_OP_LIST, SB_OP_GET, SB_OP_PUT, SB_OP_DEL, SB_OP_BYE.
+
+Envíe las respuestas adecuadas (códigos de error, y en GET un descriptor de archivo mediante SCM_RIGHTS).
+
+Registre todas las operaciones en el log usando sb_log.
+
+A continuación se detalla cada parte.
+
+1. Implementación del cliente (safebox_client.c)
+Funciones a implementar
+int sb_connect(const char *socket_path, const char *password)
+Crear un socket Unix con socket(AF_UNIX, SOCK_STREAM, 0).
+
+Conectar a socket_path (será "/tmp/safebox.sock").
+
+Calcular el hash de password con sb_djb2 (definido en safebox.h).
+
+Enviar un mensaje de autenticación:
+
+c
+sb_auth_msg_t auth = { .op = SB_OP_LIST, .password_hash = hash };
+(El campo op puede ser cualquier opcode; se usa solo como marcador).
+
+Recibir un byte de respuesta del daemon (debería ser SB_OK si la autenticación fue exitosa).
+
+Si es SB_OK, retornar el descriptor del socket; en caso contrario, cerrarlo y retornar -1.
+
+void sb_bye(int sockfd)
+Enviar un solo byte SB_OP_BYE por el socket.
+
+Cerrar el socket con close(sockfd).
+
+int sb_list(int sockfd, char *buf, size_t buflen)
+Enviar un byte SB_OP_LIST.
+
+Recibir un byte de respuesta. Si no es SB_OK, retornar -1.
+
+Luego recibir el listado en el formato:
+
+Un uint32_t (en big-endian) con la cantidad de archivos (n).
+
+n cadenas terminadas en \0 (cada una es el nombre de un archivo).
+
+Escribir en buf los nombres separados por \n, con un \0 al final, sin exceder buflen.
+
+Retornar el número de archivos listados (o -1 en error).
+
+int sb_get(int sockfd, const char *filename)
+Enviar:
+
+Byte SB_OP_GET.
+
+El nombre del archivo seguido de \0.
+
+Recibir un byte de respuesta.
+
+Si es SB_OK, el daemon enviará un descriptor de archivo mediante SCM_RIGHTS.
+
+Usar recvmsg() con un mensaje de control para recibir el fd.
+
+Retornar el descriptor recibido (listo para leer el contenido descifrado).
+
+Si el código de respuesta es distinto de SB_OK, retornar -1.
+
+int sb_put(int sockfd, const char *filename, const char *filepath)
+Abrir el archivo local filepath con open() y leer todo su contenido.
+
+Enviar:
+
+Byte SB_OP_PUT.
+
+Nombre del archivo (terminado en \0).
+
+uint32_t con el tamaño del contenido (en big-endian, usando htonl).
+
+Los bytes del contenido.
+
+Recibir un byte de respuesta. Si es SB_OK, retornar 0; en caso contrario, -1.
+
+int sb_del(int sockfd, const char *filename)
+Enviar:
+
+Byte SB_OP_DEL.
+
+Nombre del archivo terminado en \0.
+
+Recibir un byte de respuesta. Retornar 0 si es SB_OK, -1 en caso contrario.
+
+Notas importantes para el cliente:
+
+Usa send() y recv() con MSG_WAITALL o implementa funciones auxiliares send_all()/recv_all() para garantizar que se envíen/reciban todos los bytes.
+
+Para recibir el fd en sb_get, consulta el ejemplo de recvmsg con SCM_RIGHTS (man 7 unix). El buffer de control debe tener tamaño suficiente (CMSG_SPACE(sizeof(int))).
+
+No olvides incluir <arpa/inet.h> para htonl y ntohl, y <sys/socket.h> para CMSG_*.
+
+2. Modificaciones en el daemon (safebox-daemon.c)
+Debes reemplazar la función manejar_cliente() actual por una que haga lo siguiente:
+
+Paso 1: Autenticación
+Leer exactamente sizeof(sb_auth_msg_t) bytes del socket conn_fd.
+
+Comparar auth.password_hash con la variable global master_key_hash (ya calculada al arrancar el daemon).
+
+Si no coinciden:
+
+Registrar sb_log(log_fd, SB_LOG_WARN, "autenticacion fallida uid=%d pid=%d", uid, client_pid);
+
+Cerrar la conexión (sin enviar nada) y retornar.
+
+Si coinciden:
+
+Enviar un byte SB_OK por el socket.
+
+Registrar sb_log(log_fd, SB_LOG_OK, "autenticacion exitosa uid=%d pid=%d", uid, client_pid);
+
+Paso 2: Bucle de comandos
+Una vez autenticado, entra en un bucle infinito que:
+
+Lee un byte (opcode) del socket.
+
+Si la lectura retorna 0 (cliente cerró), salir del bucle.
+
+Según opcode, llama a las funciones correspondientes (ya implementadas por la Persona A) y envía la respuesta.
+
+SB_OP_LIST
+Llamar a list_files(&lista, &count).
+
+Si falla, enviar un byte SB_ERR_IO y continuar.
+
+En caso de éxito:
+
+Enviar un byte SB_OK.
+
+Construir un buffer con:
+
+uint32_t n = htonl(count); (big-endian)
+
+Para cada nombre, escribir el string terminado en \0.
+
+Enviar todo el buffer con send_all.
+
+Registrar sb_log(log_fd, SB_LOG_OK, "LIST — enviados %zu archivos", count);.
+
+Liberar la lista (free cada nombre y el arreglo).
+
+SB_OP_GET
+Leer el nombre del archivo (hasta \0). Puedes usar recv_all en un bucle hasta encontrar el \0.
+
+Llamar a get_file_as_memfd(name, &fd_mem).
+
+Si retorna -1 (error):
+
+Enviar un byte con el código apropiado (SB_ERR_NOFILE si el archivo no existe, SB_ERR_CORRUPT si la magia falla, etc.).
+
+Registrar sb_log(log_fd, SB_LOG_WARN, "GET %s — archivo no encontrado/corrupto", name);.
+
+Si retorna 0:
+
+Enviar un byte SB_OK.
+
+Enviar el descriptor fd_mem usando sendmsg con SCM_RIGHTS.
+
+Registrar sb_log(log_fd, SB_LOG_OK, "GET %s — entregado a pid=%d", name, client_pid);.
+
+Cerrar fd_mem localmente (el cliente ya tiene su copia).
+
+SB_OP_PUT
+Leer el nombre (hasta \0).
+
+Leer un uint32_t con el tamaño (convertir con ntohl).
+
+Leer exactamente size bytes del contenido.
+
+Llamar a put_file(name, data, size).
+
+Enviar un byte de respuesta: SB_OK si retornó 0, SB_ERR_IO en caso contrario.
+
+Registrar sb_log(log_fd, SB_LOG_OK, "PUT %s — cifrado y guardado (pid=%d)", name, client_pid); o el nivel WARN si falló.
+
+SB_OP_DEL
+Leer el nombre (hasta \0).
+
+Llamar a del_file(name).
+
+Enviar SB_OK si retornó 0, SB_ERR_NOFILE si el archivo no existía, SB_ERR_IO en otros casos.
+
+Registrar sb_log(log_fd, SB_LOG_OK, "DEL %s — eliminado (pid=%d)", name, client_pid); o advertencia según corresponda.
+
+SB_OP_BYE
+Registrar sb_log(log_fd, SB_LOG_INFO, "BYE uid=%d pid=%d — sesion cerrada", uid, client_pid);.
+
+Cerrar la conexión y salir del bucle.
+
+Notas para el daemon:
+
+Utiliza las funciones auxiliares send_all y recv_all que deben estar definidas (puedes escribirlas al inicio del archivo).
+
+Para SCM_RIGHTS en GET, revisa la documentación de sendmsg. Necesitarás un struct iovec con un byte (el código SB_OK) y un mensaje de control que contenga el descriptor.
+
+Asegúrate de que todas las operaciones estén registradas en el log con los niveles adecuados (INFO, OK, WARN, ERROR).
+
+Maneja errores de lectura/escritura en el socket cerrando la conexión y registrando.
+
