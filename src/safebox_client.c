@@ -1,4 +1,4 @@
-/* *
+/* 
  * safebox_client.c
  *
  * CI3825 - Sistemas de Operacion I
