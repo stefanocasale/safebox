@@ -1,4 +1,4 @@
-/* 
+/*
  * safebox_client.c
  *
  * CI3825 - Sistemas de Operacion I
@@ -35,6 +35,9 @@
 
 #include "safebox.h"
 #include "safebox_client.h"
+
+#include <arpa/inet.h>
+
 
 /* helpers internos */
 
@@ -165,32 +168,61 @@ int sb_list(int sockfd, char *buf, size_t buflen) {
         return -1;
     }
 
-    size_t off = 0;
-    while (off < buflen - 1) {
-        ssize_t n = recv(sockfd, buf + off, buflen - 1 - off, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (n == 0) break;
-        off += (size_t)n;
-        if (buf[off - 1] == '\0') break;
-    }
+    // 1) Leer respuesta del daemon
+    uint8_t resp;
+    if (recv_all(sockfd, &resp, 1) < 0)
+        return -1;
 
-    if (off == 0) {
-        if (buflen > 0) buf[0] = '\0';
+    if (resp != SB_OK) {
+        // error del daemon → lista vacía
+        buf[0] = '\0';
         return 0;
     }
 
-    buf[buflen - 1] = '\0';
+    // 2) Leer count (uint32_t big-endian)
+    uint32_t count_be;
+    if (recv_all(sockfd, &count_be, sizeof(count_be)) < 0)
+        return -1;
 
-    int count = 0;
-    for (size_t i = 0; i < off && buf[i] != '\0'; ++i) {
-        if (buf[i] == '\n') count++;
+    uint32_t count = ntohl(count_be);
+
+    if (count == 0) {
+        buf[0] = '\0';
+        return 0;
     }
 
-    return count;
+    // 3) Leer todos los nombres concatenados en buf
+    //    Cada nombre termina en '\0'
+    size_t off = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        // Leer nombre byte a byte hasta '\0'
+        while (off < buflen - 1) {
+            if (recv(sockfd, &buf[off], 1, 0) <= 0)
+                return -1;
+
+            if (buf[off] == '\0') {
+                off++;
+                break;
+            }
+
+            off++;
+        }
+
+        if (off >= buflen - 1) {
+            // buffer insuficiente
+            buf[buflen - 1] = '\0';
+            return i; // devolvemos los que sí cupieron
+        }
+    }
+
+    // Asegurar terminación
+    buf[buflen - 1] = '\0';
+
+    // 4) Retornar cantidad de archivos
+    return (int)count;
 }
+
 
 /*
  * sb_get()
@@ -333,7 +365,7 @@ int sb_put(int sockfd, const char *filename, const char *filepath) {
     }
 
     uint8_t op = SB_OP_PUT;
-    uint32_t payload_size = size;
+    uint32_t payload_size = htonl(size);
 
     /* mensaje: [op][nombre\0][uint32_t tamano][bytes] */
     size_t header_len = 1 + flen + sizeof(uint32_t);
