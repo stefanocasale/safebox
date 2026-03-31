@@ -38,39 +38,47 @@
 
 #include <arpa/inet.h>
 
-
 /* helpers internos */
 
-static int send_all(int fd, const void *buf, size_t len) {
+static int send_all(int fd, const void *buf, size_t len)
+{
     const uint8_t *p = (const uint8_t *)buf;
-    while (len > 0) {
+    while (len > 0)
+    {
         ssize_t n = send(fd, p, len, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
             return -1;
         }
-        if (n == 0) return -1;
+        if (n == 0)
+            return -1;
         p += n;
         len -= (size_t)n;
     }
     return 0;
 }
 
-static int recv_all(int fd, void *buf, size_t len) {
+static int recv_all(int fd, void *buf, size_t len)
+{
     uint8_t *p = (uint8_t *)buf;
-    while (len > 0) {
+    while (len > 0)
+    {
         ssize_t n = recv(fd, p, len, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
             return -1;
         }
-        if (n == 0) return -1;
+        if (n == 0)
+            return -1;
         p += n;
         len -= (size_t)n;
     }
     return 0;
 }
-
 
 /*
  * sb_connect()
@@ -86,29 +94,34 @@ static int recv_all(int fd, void *buf, size_t len) {
  * Retorna: fd del socket autenticado, o -1 si falla.
  * El caller es responsable de cerrar con sb_bye().
  */
-int sb_connect(const char *socket_path, const char *password) {
-    
-    if (!socket_path || !password) {
+int sb_connect(const char *socket_path, const char *password)
+{
+
+    if (!socket_path || !password)
+    {
         errno = EINVAL;
         return -1;
     }
 
     int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sockfd < 0) {
+    if (sockfd < 0)
+    {
         return -1;
     }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    if (strlen(socket_path) >= sizeof(addr.sun_path)) {
+    if (strlen(socket_path) >= sizeof(addr.sun_path))
+    {
         close(sockfd);
         errno = ENAMETOOLONG;
         return -1;
     }
     strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
         close(sockfd);
         return -1;
     }
@@ -117,18 +130,21 @@ int sb_connect(const char *socket_path, const char *password) {
     msg.op = SB_OP_LIST; /* dummy opcode segun especificacion */
     msg.password_hash = sb_djb2(password);
 
-    if (send_all(sockfd, &msg, sizeof(msg)) < 0) {
+    if (send_all(sockfd, &msg, sizeof(msg)) < 0)
+    {
         close(sockfd);
         return -1;
     }
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) {
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    {
         close(sockfd);
         return -1;
     }
 
-    if (resp != SB_OK) {
+    if (resp != SB_OK)
+    {
         close(sockfd);
         errno = EACCES;
         return -1;
@@ -142,8 +158,10 @@ int sb_connect(const char *socket_path, const char *password) {
  *
  * Cierra la sesion enviando SB_OP_BYE al daemon y cierra sockfd.
  */
-void sb_bye(int sockfd) {
-    if (sockfd < 0) return;
+void sb_bye(int sockfd)
+{
+    if (sockfd < 0)
+        return;
     uint8_t op = SB_OP_BYE;
     (void)send(sockfd, &op, sizeof(op), 0);
     close(sockfd);
@@ -157,72 +175,89 @@ void sb_bye(int sockfd) {
  *
  * Retorna: numero de archivos listados, o -1 si hay error.
  */
-int sb_list(int sockfd, char *buf, size_t buflen) {
-    if (sockfd < 0 || !buf || buflen == 0) {
+int sb_list(int sockfd, char *buf, size_t buflen)
+{
+    if (sockfd < 0 || !buf || buflen == 0)
+    {
         errno = EINVAL;
         return -1;
     }
 
     uint8_t op = SB_OP_LIST;
-    if (send_all(sockfd, &op, sizeof(op)) < 0) {
+    if (send_all(sockfd, &op, sizeof(op)) < 0)
+    {
         return -1;
     }
 
-    // 1) Leer respuesta del daemon
+    // Leemos respuesta del daemon
     uint8_t resp;
     if (recv_all(sockfd, &resp, 1) < 0)
         return -1;
 
-    if (resp != SB_OK) {
-        // error del daemon → lista vacía
+    if (resp != SB_OK)
+    {
+        // error del daemon
         buf[0] = '\0';
         return 0;
     }
 
-    // 2) Leer count (uint32_t big-endian)
+    // Leemos count (uint32_t big-endian)
     uint32_t count_be;
     if (recv_all(sockfd, &count_be, sizeof(count_be)) < 0)
         return -1;
 
     uint32_t count = ntohl(count_be);
 
-    if (count == 0) {
+    if (count == 0)
+    {
         buf[0] = '\0';
         return 0;
     }
 
-    // 3) Leer todos los nombres concatenados en buf
+    // Leemos todos los nombres concatenados en buf
     //    Cada nombre termina en '\0'
     size_t off = 0;
 
-    for (uint32_t i = 0; i < count; i++) {
-        // Leer nombre byte a byte hasta '\0'
-        while (off < buflen - 1) {
+    for (uint32_t i = 0; i < count; i++)
+    {
+        // Leemos nombre byte a byte
+        while (off < buflen - 1)
+        {
             if (recv(sockfd, &buf[off], 1, 0) <= 0)
                 return -1;
 
-            if (buf[off] == '\0') {
+            if (buf[off] == '\0')
+            {
+                // Si encontramos el fin del nombre, lo reemplazamos por \n
+                // (excepto si es el último archivo, donde dejaremos que se sobrescriba luego con \0)
+                buf[off] = '\n';
                 off++;
                 break;
             }
-
             off++;
         }
 
-        if (off >= buflen - 1) {
+        if (off >= buflen - 1)
+        {
             // buffer insuficiente
             buf[buflen - 1] = '\0';
-            return i; // devolvemos los que sí cupieron
+            return (int)i; // devolvemos los que sí cupieron
         }
     }
 
-    // Asegurar terminación
-    buf[buflen - 1] = '\0';
+    // Aseguramos terminación correcta.
+    if (off > 0)
+    {
+        buf[off - 1] = '\0';
+    }
+    else
+    {
+        buf[0] = '\0';
+    }
 
-    // 4) Retornar cantidad de archivos
+    // Retornamos cantidad de archivos
     return (int)count;
 }
-
 
 /*
  * sb_get()
@@ -235,14 +270,17 @@ int sb_list(int sockfd, char *buf, size_t buflen) {
  *
  * IMPORTANTE: el caller es responsable de close(fd) cuando termine.
  */
-int sb_get(int sockfd, const char *filename) {
-    if (sockfd < 0 || !filename) {
+int sb_get(int sockfd, const char *filename)
+{
+    if (sockfd < 0 || !filename)
+    {
         errno = EINVAL;
         return -1;
     }
 
     size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN) {
+    if (flen > MAX_FNAME_LEN)
+    {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -250,11 +288,13 @@ int sb_get(int sockfd, const char *filename) {
     uint8_t op = SB_OP_GET;
     size_t msglen = 1 + flen;
     uint8_t *msg = malloc(msglen);
-    if (!msg) return -1;
+    if (!msg)
+        return -1;
     msg[0] = op;
     memcpy(msg + 1, filename, flen);
 
-    if (send_all(sockfd, msg, msglen) < 0) {
+    if (send_all(sockfd, msg, msglen) < 0)
+    {
         free(msg);
         return -1;
     }
@@ -276,22 +316,27 @@ int sb_get(int sockfd, const char *filename) {
     msgh.msg_controllen = sizeof(cmsgbuf);
 
     ssize_t n = recvmsg(sockfd, &msgh, 0);
-    if (n < 0) {
+    if (n < 0)
+    {
         return -1;
     }
-    if (n == 0) {
+    if (n == 0)
+    {
         errno = ECONNRESET;
         return -1;
     }
 
     int received_fd = -1;
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msgh);
-    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+    {
         memcpy(&received_fd, CMSG_DATA(cmsg), sizeof(int));
     }
 
-    if (status != SB_OK || received_fd < 0) {
-        if (received_fd >= 0) close(received_fd);
+    if (status != SB_OK || received_fd < 0)
+    {
+        if (received_fd >= 0)
+            close(received_fd);
         errno = (status == SB_ERR_NOFILE) ? ENOENT : EIO;
         return -1;
     }
@@ -310,28 +355,34 @@ int sb_get(int sockfd, const char *filename) {
  *
  * Retorna: 0 si exito, -1 si error.
  */
-int sb_put(int sockfd, const char *filename, const char *filepath) {
-    if (sockfd < 0 || !filename || !filepath) {
+int sb_put(int sockfd, const char *filename, const char *filepath)
+{
+    if (sockfd < 0 || !filename || !filepath)
+    {
         errno = EINVAL;
         return -1;
     }
 
     size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN) {
+    if (flen > MAX_FNAME_LEN)
+    {
         errno = ENAMETOOLONG;
         return -1;
     }
 
     int fd = open(filepath, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0)
+        return -1;
 
     struct stat st;
-    if (fstat(fd, &st) < 0) {
+    if (fstat(fd, &st) < 0)
+    {
         close(fd);
         return -1;
     }
 
-    if (st.st_size < 0) {
+    if (st.st_size < 0)
+    {
         close(fd);
         errno = EINVAL;
         return -1;
@@ -339,26 +390,32 @@ int sb_put(int sockfd, const char *filename, const char *filepath) {
 
     uint32_t size = (uint32_t)st.st_size;
     uint8_t *buf = malloc(size);
-    if (!buf && size > 0) {
+    if (!buf && size > 0)
+    {
         close(fd);
         return -1;
     }
 
     ssize_t rtotal = 0;
-    while (rtotal < (ssize_t)size) {
+    while (rtotal < (ssize_t)size)
+    {
         ssize_t n = read(fd, buf + rtotal, size - (size_t)rtotal);
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
             free(buf);
             close(fd);
             return -1;
         }
-        if (n == 0) break;
+        if (n == 0)
+            break;
         rtotal += n;
     }
     close(fd);
 
-    if ((uint32_t)rtotal != size) {
+    if ((uint32_t)rtotal != size)
+    {
         free(buf);
         errno = EIO;
         return -1;
@@ -370,7 +427,8 @@ int sb_put(int sockfd, const char *filename, const char *filepath) {
     /* mensaje: [op][nombre\0][uint32_t tamano][bytes] */
     size_t header_len = 1 + flen + sizeof(uint32_t);
     uint8_t *header = malloc(header_len);
-    if (!header) {
+    if (!header)
+    {
         free(buf);
         return -1;
     }
@@ -381,25 +439,29 @@ int sb_put(int sockfd, const char *filename, const char *filepath) {
     off += flen;
     memcpy(header + off, &payload_size, sizeof(uint32_t));
 
-    if (send_all(sockfd, header, header_len) < 0) {
+    if (send_all(sockfd, header, header_len) < 0)
+    {
         free(header);
         free(buf);
         return -1;
     }
     free(header);
 
-    if (size > 0 && send_all(sockfd, buf, size) < 0) {
+    if (size > 0 && send_all(sockfd, buf, size) < 0)
+    {
         free(buf);
         return -1;
     }
     free(buf);
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) {
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    {
         return -1;
     }
 
-    if (resp != SB_OK) {
+    if (resp != SB_OK)
+    {
         errno = EIO;
         return -1;
     }
@@ -414,14 +476,17 @@ int sb_put(int sockfd, const char *filename, const char *filepath) {
  *
  * Retorna: 0 si exito, -1 si el archivo no existe o hay error.
  */
-int sb_del(int sockfd, const char *filename) {
-    if (sockfd < 0 || !filename) {
+int sb_del(int sockfd, const char *filename)
+{
+    if (sockfd < 0 || !filename)
+    {
         errno = EINVAL;
         return -1;
     }
 
     size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN) {
+    if (flen > MAX_FNAME_LEN)
+    {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -429,27 +494,30 @@ int sb_del(int sockfd, const char *filename) {
     uint8_t op = SB_OP_DEL;
     size_t msglen = 1 + flen;
     uint8_t *msg = malloc(msglen);
-    if (!msg) return -1;
+    if (!msg)
+        return -1;
 
     msg[0] = op;
     memcpy(msg + 1, filename, flen);
 
-    if (send_all(sockfd, msg, msglen) < 0) {
+    if (send_all(sockfd, msg, msglen) < 0)
+    {
         free(msg);
         return -1;
     }
     free(msg);
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) {
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    {
         return -1;
     }
 
-    if (resp != SB_OK) {
+    if (resp != SB_OK)
+    {
         errno = (resp == SB_ERR_NOFILE) ? ENOENT : EIO;
         return -1;
     }
 
     return 0;
-
 }

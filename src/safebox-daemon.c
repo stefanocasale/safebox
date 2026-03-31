@@ -73,30 +73,40 @@ static void sigterm_handler(int sig)
     terminar = 1;
 }
 
-static int send_all(int fd, const void *buf, size_t len) {
+static int send_all(int fd, const void *buf, size_t len)
+{
     const uint8_t *p = buf;
-    while (len > 0) {
+    while (len > 0)
+    {
         ssize_t n = send(fd, p, len, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
             return -1;
         }
-        if (n == 0) return -1;
+        if (n == 0)
+            return -1;
         p += n;
         len -= n;
     }
     return 0;
 }
 
-static int recv_all(int fd, void *buf, size_t len) {
+static int recv_all(int fd, void *buf, size_t len)
+{
     uint8_t *p = buf;
-    while (len > 0) {
+    while (len > 0)
+    {
         ssize_t n = recv(fd, p, len, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
             return -1;
         }
-        if (n == 0) return -1;
+        if (n == 0)
+            return -1;
         p += n;
         len -= n;
     }
@@ -111,44 +121,84 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Uso: %s <directorio_boveda>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
+
     boveda_path = argv[1];
+
+    struct stat st;
+
+    // Validamos que la ruta exista
+    if (stat(boveda_path, &st) != 0)
+    {
+        fprintf(stderr, "Error: El directorio '%s' no existe.\n", boveda_path);
+        exit(EXIT_FAILURE);
+    }
+
+    // Validamos que sea realmente un directorio y no un archivo
+    if (!S_ISDIR(st.st_mode))
+    {
+        fprintf(stderr, "Error: '%s' no es un directorio válido.\n", boveda_path);
+        exit(EXIT_FAILURE);
+    }
+
+    // Validamos permisos de lectura y escritura
+    if (access(boveda_path, R_OK | W_OK) != 0)
+    {
+        fprintf(stderr, "Error: Sin permisos de lectura/escritura en '%s'.\n", boveda_path);
+        exit(EXIT_FAILURE);
+    }
 
     // Lectura de clave
     struct termios orig_termios, new_termios;
     char password[256];
 
-    // Obtenemos atributos actuales de la terminal
-    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1)
-    {
-        perror("tcgetattr");
-        exit(EXIT_FAILURE);
-    }
+    // Detectamos Script o Terminal
+    int is_tty = isatty(STDIN_FILENO);
 
-    new_termios = orig_termios;
-    new_termios.c_lflag &= ~ECHO; // Desactiva eco
-
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &new_termios) == -1)
+    // Si es un terminal, desactivamos el echo para que no se muestre la contraseña
+    if (is_tty)
     {
-        perror("tcsetattr");
-        exit(EXIT_FAILURE);
+        // Obtenemos atributos actuales de la terminal
+        if (tcgetattr(STDIN_FILENO, &orig_termios) == -1)
+        {
+            perror("tcgetattr");
+            exit(EXIT_FAILURE);
+        }
+
+        new_termios = orig_termios;
+        new_termios.c_lflag &= ~ECHO; // Desactiva eco
+
+        // Aplicamos los nuevos atributos
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &new_termios) == -1)
+        {
+            perror("tcsetattr");
+            exit(EXIT_FAILURE);
+        }
+
+        // Solo imprimimos el prompt visual si es un humano
+        printf("safebox password: ");
+        fflush(stdout);
     }
 
     // Leemos contraseña
-    printf("safebox password: ");
-    fflush(stdout);
     if (fgets(password, sizeof(password), stdin) == NULL)
     {
-        // Restauramos terminal antes de salir
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        if (is_tty)
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
         fprintf(stderr, "Error leyendo password\n");
         exit(EXIT_FAILURE);
     }
 
-    // Restauraramos terminal inmediatamente
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    // Restauramos terminal inmediatamente
+    if (is_tty)
+    {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        printf("\n"); // Agregamos un salto de línea para que el "[safebox] pid..." se vea ordenado abajo
+    }
 
     // Eliminamos el salto de línea final
     size_t len = strlen(password);
+
+    // Si el usuario ingresó una contraseña y presionó Enter, eliminamos el salto de línea
     if (len > 0 && password[len - 1] == '\n')
     {
         password[len - 1] = '\0';
@@ -185,7 +235,8 @@ int main(int argc, char *argv[])
     }
 
     if (pid > 0)
-    { // Padre
+    {
+        // Padre
         printf("[safebox] pid=%d listo\n", pid);
         exit(EXIT_SUCCESS); // El padre termina correctamente
     }
@@ -318,8 +369,6 @@ int main(int argc, char *argv[])
     exit(EXIT_SUCCESS);
 }
 
-
-
 /*
  * list_files - Obtiene la lista de nombres de archivos en la bóveda
  * @lista: puntero a un arreglo de strings donde se guardarán los nombres
@@ -337,21 +386,25 @@ static int list_files(char ***lista, size_t *count)
 
     // Abrimos el directorio de la bóveda
     dir = opendir(boveda_path);
-    if (dir == NULL) {
+    if (dir == NULL)
+    {
         return -1;
     }
 
     // Contamos los archivos y asignamos dinámicamente
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = readdir(dir)) != NULL)
+    {
         // Ignoramos "." y ".."
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
 
         // Agrandamos el arreglo si es necesario
-        if (n >= capacity) {
+        if (n >= capacity)
+        {
             capacity = capacity == 0 ? 8 : capacity * 2;
             char **new_names = realloc(names, capacity * sizeof(char *));
-            if (new_names == NULL) {
+            if (new_names == NULL)
+            {
                 // Error de memoria: liberamos lo que llevamos
                 for (size_t i = 0; i < n; i++)
                     free(names[i]);
@@ -364,7 +417,8 @@ static int list_files(char ***lista, size_t *count)
 
         // Duplicamos el nombre y lo guardamos
         names[n] = strdup(entry->d_name);
-        if (names[n] == NULL) {
+        if (names[n] == NULL)
+        {
             for (size_t i = 0; i < n; i++)
                 free(names[i]);
             free(names);
@@ -390,18 +444,22 @@ static int list_files(char ***lista, size_t *count)
  */
 static int del_file(const char *name)
 {
-    // Validamos que el nombre no contenga '/' 
-    if (strchr(name, '/') != NULL) {
-        return -1;  
+    // Validamos que el nombre no contenga '/'
+    if (strchr(name, '/') != NULL)
+    {
+        return -1;
     }
 
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", boveda_path, name);
 
-    if (unlink(path) == 0) {
-        return 0;   // éxito
-    } else {
-        return -1;  // error 
+    if (unlink(path) == 0)
+    {
+        return 0; // éxito
+    }
+    else
+    {
+        return -1; // error
     }
 }
 
@@ -416,7 +474,8 @@ static int del_file(const char *name)
 static int put_file(const char *name, const unsigned char *data, uint32_t size)
 {
     // Validamos nombre
-    if (strchr(name, '/') != NULL) {
+    if (strchr(name, '/') != NULL)
+    {
         return -1;
     }
 
@@ -425,14 +484,16 @@ static int put_file(const char *name, const unsigned char *data, uint32_t size)
 
     // Abrimos el archivo para escritura
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         return -1;
     }
 
-    // Construimos el buffer 
-    uint32_t payload_size = size + SB_MAGIC_LEN; 
+    // Construimos el buffer
+    uint32_t payload_size = size + SB_MAGIC_LEN;
     unsigned char *plain = malloc(payload_size);
-    if (!plain) {
+    if (!plain)
+    {
         close(fd);
         return -1;
     }
@@ -440,11 +501,12 @@ static int put_file(const char *name, const unsigned char *data, uint32_t size)
     memcpy(plain + SB_MAGIC_LEN, data, size);
 
     // Ciframos con XOR
-    for (uint32_t i = 0; i < payload_size; i++) {
+    for (uint32_t i = 0; i < payload_size; i++)
+    {
         plain[i] ^= master_key[i % master_key_len];
     }
 
-    // Preparamos la cabecera 
+    // Preparamos la cabecera
     sb_file_header_t header;
     header.version = SB_VERSION;
     header.payload_size = htonl(payload_size); // big-endian
@@ -452,7 +514,8 @@ static int put_file(const char *name, const unsigned char *data, uint32_t size)
 
     // Escribimos cabecera
     ssize_t written = write(fd, &header, sizeof(header));
-    if (written != sizeof(header)) {
+    if (written != sizeof(header))
+    {
         free(plain);
         close(fd);
         return -1;
@@ -460,7 +523,8 @@ static int put_file(const char *name, const unsigned char *data, uint32_t size)
 
     // Escribimos payload cifrado
     written = write(fd, plain, payload_size);
-    if (written != (ssize_t)payload_size) {
+    if (written != (ssize_t)payload_size)
+    {
         free(plain);
         close(fd);
         return -1;
@@ -481,7 +545,8 @@ static int put_file(const char *name, const unsigned char *data, uint32_t size)
 static int get_file_as_memfd(const char *name, int *out_fd)
 {
     // Validamos nombre
-    if (strchr(name, '/') != NULL) {
+    if (strchr(name, '/') != NULL)
+    {
         return -1;
     }
 
@@ -489,20 +554,23 @@ static int get_file_as_memfd(const char *name, int *out_fd)
     snprintf(path, sizeof(path), "%s/%s", boveda_path, name);
 
     int fd_file = open(path, O_RDONLY);
-    if (fd_file == -1) {
-        return -1; 
+    if (fd_file == -1)
+    {
+        return -1;
     }
 
     // Leemos la cabecera
     sb_file_header_t header;
     ssize_t n = read(fd_file, &header, sizeof(header));
-    if (n != sizeof(header)) {
+    if (n != sizeof(header))
+    {
         close(fd_file);
         return -1;
     }
 
     // Validamos versión
-    if (header.version != SB_VERSION) {
+    if (header.version != SB_VERSION)
+    {
         close(fd_file);
         return -1;
     }
@@ -511,12 +579,14 @@ static int get_file_as_memfd(const char *name, int *out_fd)
 
     // Leemos el payload cifrado
     unsigned char *cipher = malloc(payload_size);
-    if (!cipher) {
+    if (!cipher)
+    {
         close(fd_file);
         return -1;
     }
     n = read(fd_file, cipher, payload_size);
-    if (n != (ssize_t)payload_size) {
+    if (n != (ssize_t)payload_size)
+    {
         free(cipher);
         close(fd_file);
         return -1;
@@ -524,27 +594,31 @@ static int get_file_as_memfd(const char *name, int *out_fd)
     close(fd_file);
 
     // Desciframos in-place
-    for (uint32_t i = 0; i < payload_size; i++) {
+    for (uint32_t i = 0; i < payload_size; i++)
+    {
         cipher[i] ^= master_key[i % master_key_len];
     }
 
     // Verificamos el magic number
-    if (memcmp(cipher, SB_MAGIC, SB_MAGIC_LEN) != 0) {
-        free(cipher);
-        return -1; 
-    }
-
-    // Creamos un memfd
-    int fd_mem = memfd_create("content", MFD_CLOEXEC);
-    if (fd_mem == -1) {
+    if (memcmp(cipher, SB_MAGIC, SB_MAGIC_LEN) != 0)
+    {
         free(cipher);
         return -1;
     }
 
-    // Escribimos el contenido 
+    // Creamos un memfd
+    int fd_mem = memfd_create("content", MFD_CLOEXEC);
+    if (fd_mem == -1)
+    {
+        free(cipher);
+        return -1;
+    }
+
+    // Escribimos el contenido
     uint32_t content_size = payload_size - SB_MAGIC_LEN;
     n = write(fd_mem, cipher + SB_MAGIC_LEN, content_size);
-    if (n != (ssize_t)content_size) {
+    if (n != (ssize_t)content_size)
+    {
         close(fd_mem);
         free(cipher);
         return -1;
@@ -564,13 +638,15 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
     sb_auth_msg_t auth;
 
     /* Paso 1: AUTENTICACIÓN */
-    if (recv_all(conn_fd, &auth, sizeof(auth)) < 0) {
+    if (recv_all(conn_fd, &auth, sizeof(auth)) < 0)
+    {
         sb_log(log_fd, SB_LOG_WARN, "conexion rota antes de autenticacion uid=%d pid=%d", uid, client_pid);
         close(conn_fd);
         return;
     }
 
-    if (auth.password_hash != master_key_hash) {
+    if (auth.password_hash != master_key_hash)
+    {
         sb_log(log_fd, SB_LOG_WARN, "autenticacion fallida uid=%d pid=%d", uid, client_pid);
         close(conn_fd);
         return;
@@ -582,25 +658,30 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
     sb_log(log_fd, SB_LOG_OK, "autenticacion exitosa uid=%d pid=%d", uid, client_pid);
 
     /* Paso 2: BUCLE DE COMANDOS */
-    while (1) {
+    while (1)
+    {
         uint8_t op;
         ssize_t n = recv(conn_fd, &op, 1, 0);
 
-        if (n == 0) {
+        if (n == 0)
+        {
             sb_log(log_fd, SB_LOG_INFO, "cliente pid=%d cerro conexion", client_pid);
             break;
         }
-        if (n < 0) {
+        if (n < 0)
+        {
             sb_log(log_fd, SB_LOG_WARN, "error leyendo opcode pid=%d: %s", client_pid, strerror(errno));
             break;
         }
 
         /* ---------------- SB_OP_LIST ---------------- */
-        if (op == SB_OP_LIST) {
+        if (op == SB_OP_LIST)
+        {
             char **lista = NULL;
             size_t count = 0;
 
-            if (list_files(&lista, &count) < 0) {
+            if (list_files(&lista, &count) < 0)
+            {
                 uint8_t err = SB_ERR_IO;
                 send_all(conn_fd, &err, 1);
                 continue;
@@ -612,7 +693,8 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
             uint32_t n_be = htonl(count);
             send_all(conn_fd, &n_be, sizeof(n_be));
 
-            for (size_t i = 0; i < count; i++) {
+            for (size_t i = 0; i < count; i++)
+            {
                 send_all(conn_fd, lista[i], strlen(lista[i]) + 1);
                 free(lista[i]);
             }
@@ -622,21 +704,26 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
         }
 
         /* ---------------- SB_OP_GET ---------------- */
-        else if (op == SB_OP_GET) {
+        else if (op == SB_OP_GET)
+        {
             char name[MAX_FNAME_LEN];
             size_t pos = 0;
 
             /* leer nombre hasta \0 */
-            while (pos < sizeof(name)) {
-                if (recv(conn_fd, &name[pos], 1, 0) <= 0) {
+            while (pos < sizeof(name))
+            {
+                if (recv(conn_fd, &name[pos], 1, 0) <= 0)
+                {
                     goto cerrar;
                 }
-                if (name[pos] == '\0') break;
+                if (name[pos] == '\0')
+                    break;
                 pos++;
             }
 
             int fd_mem;
-            if (get_file_as_memfd(name, &fd_mem) < 0) {
+            if (get_file_as_memfd(name, &fd_mem) < 0)
+            {
                 uint8_t err = SB_ERR_NOFILE;
                 send_all(conn_fd, &err, 1);
                 sb_log(log_fd, SB_LOG_WARN, "GET %s — archivo no encontrado/corrupto", name);
@@ -647,7 +734,7 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
             uint8_t resp = SB_OK;
 
             struct msghdr msg = {0};
-            struct iovec iov = { .iov_base = &resp, .iov_len = 1 };
+            struct iovec iov = {.iov_base = &resp, .iov_len = 1};
 
             char cmsgbuf[CMSG_SPACE(sizeof(int))];
             memset(cmsgbuf, 0, sizeof(cmsgbuf));
@@ -671,24 +758,31 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
         }
 
         /* ---------------- SB_OP_PUT ---------------- */
-        else if (op == SB_OP_PUT) {
+        else if (op == SB_OP_PUT)
+        {
             char name[MAX_FNAME_LEN];
             size_t pos = 0;
 
-            while (pos < sizeof(name)) {
-                if (recv(conn_fd, &name[pos], 1, 0) <= 0) goto cerrar;
-                if (name[pos] == '\0') break;
+            while (pos < sizeof(name))
+            {
+                if (recv(conn_fd, &name[pos], 1, 0) <= 0)
+                    goto cerrar;
+                if (name[pos] == '\0')
+                    break;
                 pos++;
             }
 
             uint32_t size_be;
-            if (recv_all(conn_fd, &size_be, sizeof(size_be)) < 0) goto cerrar;
+            if (recv_all(conn_fd, &size_be, sizeof(size_be)) < 0)
+                goto cerrar;
             uint32_t size = ntohl(size_be);
 
             unsigned char *data = malloc(size);
-            if (!data) goto cerrar;
+            if (!data)
+                goto cerrar;
 
-            if (recv_all(conn_fd, data, size) < 0) {
+            if (recv_all(conn_fd, data, size) < 0)
+            {
                 free(data);
                 goto cerrar;
             }
@@ -706,23 +800,30 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
         }
 
         /* ---------------- SB_OP_DEL ---------------- */
-        else if (op == SB_OP_DEL) {
+        else if (op == SB_OP_DEL)
+        {
             char name[MAX_FNAME_LEN];
             size_t pos = 0;
 
-            while (pos < sizeof(name)) {
-                if (recv(conn_fd, &name[pos], 1, 0) <= 0) goto cerrar;
-                if (name[pos] == '\0') break;
+            while (pos < sizeof(name))
+            {
+                if (recv(conn_fd, &name[pos], 1, 0) <= 0)
+                    goto cerrar;
+                if (name[pos] == '\0')
+                    break;
                 pos++;
             }
 
             int r = del_file(name);
             uint8_t resp;
 
-            if (r == 0) {
+            if (r == 0)
+            {
                 resp = SB_OK;
                 sb_log(log_fd, SB_LOG_OK, "DEL %s — eliminado (pid=%d)", name, client_pid);
-            } else {
+            }
+            else
+            {
                 resp = SB_ERR_NOFILE;
                 sb_log(log_fd, SB_LOG_WARN, "DEL %s — no existe", name);
             }
@@ -731,13 +832,15 @@ static void manejar_cliente(int conn_fd, uid_t uid, pid_t client_pid)
         }
 
         /* ---------------- SB_OP_BYE ---------------- */
-        else if (op == SB_OP_BYE) {
+        else if (op == SB_OP_BYE)
+        {
             sb_log(log_fd, SB_LOG_INFO, "BYE uid=%d pid=%d — sesion cerrada", uid, client_pid);
             break;
         }
 
         /* ---------------- OPCODE DESCONOCIDO ---------------- */
-        else {
+        else
+        {
             sb_log(log_fd, SB_LOG_WARN, "opcode desconocido %d", op);
             break;
         }
