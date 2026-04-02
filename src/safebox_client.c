@@ -42,42 +42,42 @@
 
 static int send_all(int fd, const void *buf, size_t len)
 {
-    const uint8_t *p = (const uint8_t *)buf;
-    while (len > 0)
+    const uint8_t *p = (const uint8_t *)buf; // puntero de lectura
+    while (len > 0) // enviar hasta completar
     {
-        ssize_t n = send(fd, p, len, 0);
+        ssize_t n = send(fd, p, len, 0); // intento de envío
         if (n < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR) // reintentar si fue interrumpido
                 continue;
-            return -1;
+            return -1; // error permanente
         }
-        if (n == 0)
+        if (n == 0) // conexión cerrada inesperadamente
             return -1;
-        p += n;
-        len -= (size_t)n;
+        p += n; // avanzar puntero
+        len -= (size_t)n; // reducir bytes restantes
     }
-    return 0;
+    return 0; // éxito
 }
 
 static int recv_all(int fd, void *buf, size_t len)
 {
-    uint8_t *p = (uint8_t *)buf;
-    while (len > 0)
+    uint8_t *p = (uint8_t *)buf; // puntero de escritura
+    while (len > 0) // recibir hasta completar
     {
-        ssize_t n = recv(fd, p, len, 0);
+        ssize_t n = recv(fd, p, len, 0); // intento de lectura
         if (n < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR) // reintentar si fue interrumpido
                 continue;
-            return -1;
+            return -1; // error permanente
         }
-        if (n == 0)
+        if (n == 0) // conexión cerrada
             return -1;
-        p += n;
-        len -= (size_t)n;
+        p += n; // avanzar puntero
+        len -= (size_t)n; // reducir bytes restantes
     }
-    return 0;
+    return 0; // éxito
 }
 
 /*
@@ -97,60 +97,60 @@ static int recv_all(int fd, void *buf, size_t len)
 int sb_connect(const char *socket_path, const char *password)
 {
 
-    if (!socket_path || !password)
+    if (!socket_path || !password) // validar argumentos
     {
         errno = EINVAL;
         return -1;
     }
 
-    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0); // crear socket UNIX
     if (sockfd < 0)
     {
         return -1;
     }
 
     struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    if (strlen(socket_path) >= sizeof(addr.sun_path))
+    memset(&addr, 0, sizeof(addr)); // limpiar estructura
+    addr.sun_family = AF_UNIX; // familia de socket local
+    if (strlen(socket_path) >= sizeof(addr.sun_path)) // validar longitud de ruta
     {
         close(sockfd);
         errno = ENAMETOOLONG;
         return -1;
     }
-    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1); // copiar ruta del socket
 
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) // conectar al daemon
     {
         close(sockfd);
         return -1;
     }
 
     sb_auth_msg_t msg;
-    msg.op = SB_OP_LIST; /* dummy opcode segun especificacion */
-    msg.password_hash = sb_djb2(password);
+    msg.op = SB_OP_LIST; // dummy opcode segun especificacion 
+    msg.password_hash = sb_djb2(password); // enviar hash de la clave
 
-    if (send_all(sockfd, &msg, sizeof(msg)) < 0)
+    if (send_all(sockfd, &msg, sizeof(msg)) < 0) // enviar mensaje de autenticación
     {
         close(sockfd);
         return -1;
     }
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) // recibir respuesta del daemon
     {
         close(sockfd);
         return -1;
     }
 
-    if (resp != SB_OK)
+    if (resp != SB_OK) // autenticación fallida
     {
         close(sockfd);
         errno = EACCES;
         return -1;
     }
 
-    return sockfd;
+    return sockfd; // conexión autenticada
 }
 
 /*
@@ -160,11 +160,11 @@ int sb_connect(const char *socket_path, const char *password)
  */
 void sb_bye(int sockfd)
 {
-    if (sockfd < 0)
+    if (sockfd < 0) // validar descriptor
         return;
-    uint8_t op = SB_OP_BYE;
-    (void)send(sockfd, &op, sizeof(op), 0);
-    close(sockfd);
+    uint8_t op = SB_OP_BYE; // opcode para cerrar sesión
+    (void)send(sockfd, &op, sizeof(op), 0); // enviar BYE al daemon
+    close(sockfd); // cerrar socket
 }
 
 /*
@@ -272,76 +272,76 @@ int sb_list(int sockfd, char *buf, size_t buflen)
  */
 int sb_get(int sockfd, const char *filename)
 {
-    if (sockfd < 0 || !filename)
+    if (sockfd < 0 || !filename) // validar argumentos
     {
         errno = EINVAL;
         return -1;
     }
 
-    size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN)
+    size_t flen = strlen(filename) + 1; // longitud del nombre con '\0'
+    if (flen > MAX_FNAME_LEN) // nombre demasiado largo
     {
         errno = ENAMETOOLONG;
         return -1;
     }
 
-    uint8_t op = SB_OP_GET;
-    size_t msglen = 1 + flen;
-    uint8_t *msg = malloc(msglen);
+    uint8_t op = SB_OP_GET; // opcode GET
+    size_t msglen = 1 + flen; // tamaño del mensaje
+    uint8_t *msg = malloc(msglen); // buffer para mensaje
     if (!msg)
         return -1;
-    msg[0] = op;
-    memcpy(msg + 1, filename, flen);
+    msg[0] = op; // escribir opcode
+    memcpy(msg + 1, filename, flen); // copiar nombre
 
-    if (send_all(sockfd, msg, msglen) < 0)
+    if (send_all(sockfd, msg, msglen) < 0) // enviar solicitud
     {
         free(msg);
         return -1;
     }
     free(msg);
 
-    struct msghdr msgh;
-    struct iovec iov;
-    uint8_t status;
-    char cmsgbuf[CMSG_SPACE(sizeof(int))];
+    struct msghdr msgh; // estructura para recvmsg
+    struct iovec iov; // buffer para status
+    uint8_t status; // byte de estado
+    char cmsgbuf[CMSG_SPACE(sizeof(int))]; // espacio para fd recibido
 
-    memset(&msgh, 0, sizeof(msgh));
-    memset(cmsgbuf, 0, sizeof(cmsgbuf));
+    memset(&msgh, 0, sizeof(msgh)); // limpiar msgh
+    memset(cmsgbuf, 0, sizeof(cmsgbuf)); // limpiar buffer de control
 
-    iov.iov_base = &status;
+    iov.iov_base = &status; // status en iovec
     iov.iov_len = sizeof(status);
-    msgh.msg_iov = &iov;
+    msgh.msg_iov = &iov; // asignar iovec
     msgh.msg_iovlen = 1;
-    msgh.msg_control = cmsgbuf;
+    msgh.msg_control = cmsgbuf; // buffer para fd
     msgh.msg_controllen = sizeof(cmsgbuf);
 
-    ssize_t n = recvmsg(sockfd, &msgh, 0);
-    if (n < 0)
+    ssize_t n = recvmsg(sockfd, &msgh, 0); // recibir status + fd
+    if (n < 0) // error de recvmsg
     {
         return -1;
     }
-    if (n == 0)
+    if (n == 0) // conexión cerrada
     {
         errno = ECONNRESET;
         return -1;
     }
 
-    int received_fd = -1;
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msgh);
-    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+    int received_fd = -1; // fd recibido
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msgh); // primer header de control
+    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) // validar fd
     {
-        memcpy(&received_fd, CMSG_DATA(cmsg), sizeof(int));
+        memcpy(&received_fd, CMSG_DATA(cmsg), sizeof(int)); // extraer fd
     }
 
-    if (status != SB_OK || received_fd < 0)
+    if (status != SB_OK || received_fd < 0) // verificar éxito
     {
         if (received_fd >= 0)
-            close(received_fd);
-        errno = (status == SB_ERR_NOFILE) ? ENOENT : EIO;
+            close(received_fd); // cerrar fd inválido
+        errno = (status == SB_ERR_NOFILE) ? ENOENT : EIO; // error apropiado
         return -1;
     }
 
-    return received_fd;
+    return received_fd; // devolver memfd listo para leer
 }
 
 /*
@@ -357,76 +357,75 @@ int sb_get(int sockfd, const char *filename)
  */
 int sb_put(int sockfd, const char *filename, const char *filepath)
 {
-    if (sockfd < 0 || !filename || !filepath)
+    if (sockfd < 0 || !filename || !filepath) // validar argumentos
     {
         errno = EINVAL;
         return -1;
     }
 
-    size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN)
+    size_t flen = strlen(filename) + 1; // longitud del nombre con '\0'
+    if (flen > MAX_FNAME_LEN) // nombre demasiado largo
     {
         errno = ENAMETOOLONG;
         return -1;
     }
 
-    int fd = open(filepath, O_RDONLY);
+    int fd = open(filepath, O_RDONLY); // abrir archivo local
     if (fd < 0)
         return -1;
 
     struct stat st;
-    if (fstat(fd, &st) < 0)
+    if (fstat(fd, &st) < 0) // obtener tamaño del archivo
     {
         close(fd);
         return -1;
     }
 
-    if (st.st_size < 0)
+    if (st.st_size < 0) // tamaño inválido
     {
         close(fd);
         errno = EINVAL;
         return -1;
     }
 
-    uint32_t size = (uint32_t)st.st_size;
-    uint8_t *buf = malloc(size);
+    uint32_t size = (uint32_t)st.st_size; // tamaño en uint32_t
+    uint8_t *buf = malloc(size); // buffer para contenido
     if (!buf && size > 0)
     {
         close(fd);
         return -1;
     }
 
-    ssize_t rtotal = 0;
-    while (rtotal < (ssize_t)size)
+    ssize_t rtotal = 0; // bytes leídos acumulados
+    while (rtotal < (ssize_t)size) // leer archivo completo
     {
         ssize_t n = read(fd, buf + rtotal, size - (size_t)rtotal);
         if (n < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR) // reintentar si fue interrumpido
                 continue;
             free(buf);
             close(fd);
             return -1;
         }
-        if (n == 0)
+        if (n == 0) // EOF inesperado
             break;
         rtotal += n;
     }
     close(fd);
 
-    if ((uint32_t)rtotal != size)
+    if ((uint32_t)rtotal != size) // verificar lectura completa
     {
         free(buf);
         errno = EIO;
         return -1;
     }
 
-    uint8_t op = SB_OP_PUT;
-    uint32_t payload_size = htonl(size);
+    uint8_t op = SB_OP_PUT; // opcode PUT
+    uint32_t payload_size = htonl(size); // tamaño en big-endian
 
-    /* mensaje: [op][nombre\0][uint32_t tamano][bytes] */
-    size_t header_len = 1 + flen + sizeof(uint32_t);
-    uint8_t *header = malloc(header_len);
+    size_t header_len = 1 + flen + sizeof(uint32_t); // tamaño del header
+    uint8_t *header = malloc(header_len); // buffer del header
     if (!header)
     {
         free(buf);
@@ -434,12 +433,12 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     }
 
     size_t off = 0;
-    header[off++] = op;
-    memcpy(header + off, filename, flen);
+    header[off++] = op; // escribir opcode
+    memcpy(header + off, filename, flen); // escribir nombre
     off += flen;
-    memcpy(header + off, &payload_size, sizeof(uint32_t));
+    memcpy(header + off, &payload_size, sizeof(uint32_t)); // escribir tamaño
 
-    if (send_all(sockfd, header, header_len) < 0)
+    if (send_all(sockfd, header, header_len) < 0) // enviar header
     {
         free(header);
         free(buf);
@@ -447,7 +446,7 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     }
     free(header);
 
-    if (size > 0 && send_all(sockfd, buf, size) < 0)
+    if (size > 0 && send_all(sockfd, buf, size) < 0) // enviar contenido
     {
         free(buf);
         return -1;
@@ -455,19 +454,20 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     free(buf);
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) // leer respuesta
     {
         return -1;
     }
 
-    if (resp != SB_OK)
+    if (resp != SB_OK) // verificar éxito
     {
         errno = EIO;
         return -1;
     }
 
-    return 0;
+    return 0; // éxito
 }
+
 
 /*
  * sb_del()
@@ -478,29 +478,29 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
  */
 int sb_del(int sockfd, const char *filename)
 {
-    if (sockfd < 0 || !filename)
+    if (sockfd < 0 || !filename) // validar argumentos
     {
         errno = EINVAL;
         return -1;
     }
 
-    size_t flen = strlen(filename) + 1;
-    if (flen > MAX_FNAME_LEN)
+    size_t flen = strlen(filename) + 1; // longitud del nombre incluyendo '\0'
+    if (flen > MAX_FNAME_LEN) // nombre demasiado largo
     {
         errno = ENAMETOOLONG;
         return -1;
     }
 
-    uint8_t op = SB_OP_DEL;
-    size_t msglen = 1 + flen;
-    uint8_t *msg = malloc(msglen);
+    uint8_t op = SB_OP_DEL; // opcode para eliminar archivo
+    size_t msglen = 1 + flen; // tamaño del mensaje a enviar
+    uint8_t *msg = malloc(msglen); // buffer para mensaje
     if (!msg)
         return -1;
 
-    msg[0] = op;
-    memcpy(msg + 1, filename, flen);
+    msg[0] = op; // primer byte: opcode
+    memcpy(msg + 1, filename, flen); // copiar nombre del archivo
 
-    if (send_all(sockfd, msg, msglen) < 0)
+    if (send_all(sockfd, msg, msglen) < 0) // enviar solicitud al daemon
     {
         free(msg);
         return -1;
@@ -508,16 +508,16 @@ int sb_del(int sockfd, const char *filename)
     free(msg);
 
     uint8_t resp;
-    if (recv_all(sockfd, &resp, sizeof(resp)) < 0)
+    if (recv_all(sockfd, &resp, sizeof(resp)) < 0) // leer respuesta del daemon
     {
         return -1;
     }
 
-    if (resp != SB_OK)
+    if (resp != SB_OK) // verificar si hubo error
     {
-        errno = (resp == SB_ERR_NOFILE) ? ENOENT : EIO;
+        errno = (resp == SB_ERR_NOFILE) ? ENOENT : EIO; // archivo no existe o error general
         return -1;
     }
 
-    return 0;
+    return 0; // éxito
 }
